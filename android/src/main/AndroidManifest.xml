@@ -2,6 +2,9 @@
   package="uz.flutterwithakmaljon.video_player_pip">
     <!-- Required for PiP support on Android 8.0+ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <receiver android:name=".PipActionReceiver" />
+
     
     <!--
     NOTE TO PACKAGE USERS:

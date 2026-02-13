@@ -17,6 +17,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
+import MediaPlayer
 
 /** VideoPlayerPipPlugin */
 class VideoPlayerPipPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
@@ -482,3 +483,55 @@ class VideoPlayerPipPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     }
   }
 }
+
+
+private fun buildPipParams(): PictureInPictureParams {
+    val playIntent = PendingIntent.getBroadcast(
+        context,
+        0,
+        Intent("PLAY_ACTION"),
+        PendingIntent.FLAG_IMMUTABLE
+    )
+
+    val pauseIntent = PendingIntent.getBroadcast(
+        context,
+        1,
+        Intent("PAUSE_ACTION"),
+        PendingIntent.FLAG_IMMUTABLE
+    )
+
+    val playAction = RemoteAction(
+        Icon.createWithResource(context, R.drawable.ic_play),
+        "Play",
+        "Play",
+        playIntent
+    )
+
+    val pauseAction = RemoteAction(
+        Icon.createWithResource(context, R.drawable.ic_pause),
+        "Pause",
+        "Pause",
+        pauseIntent
+    )
+
+    return PictureInPictureParams.Builder()
+        .setAspectRatio(Rational(16, 9))
+        .setActions(listOf(playAction, pauseAction))
+        .build()
+}
+
+
+class PipActionReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        when (intent.action) {
+            "PLAY_ACTION" -> {
+                // Resume ExoPlayer
+            }
+            "PAUSE_ACTION" -> {
+                // Pause ExoPlayer
+            }
+        }
+    }
+}
+
+

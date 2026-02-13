@@ -1,5 +1,10 @@
 package uz.flutterwithakmaljon.video_player_pip
 
+import android.app.PendingIntent
+import android.content.Intent
+import android.graphics.drawable.Icon
+import android.app.RemoteAction
+
 import android.app.Activity
 import android.app.PictureInPictureParams
 import android.content.Context
@@ -17,10 +22,15 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
-import MediaPlayer
 
 /** VideoPlayerPipPlugin */
 class VideoPlayerPipPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
+
+  private val ACTION_PLAY = "video_player_pip.PLAY"
+  private val ACTION_PAUSE = "video_player_pip.PAUSE"
+  private val ACTION_REWIND = "video_player_pip.REWIND"
+
+
   private val TAG = "VideoPlayerPipPlugin"
   
   /// The MethodChannel that will the communication between Flutter and native Android
@@ -155,8 +165,53 @@ class VideoPlayerPipPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
           Rational(16, 9)
         }
         
-        val paramsBuilder = PictureInPictureParams.Builder()
-            .setAspectRatio(aspectRatio)
+
+            val playIntent = PendingIntent.getBroadcast(
+                context,
+                0,
+                Intent(ACTION_PLAY),
+                PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val pauseIntent = PendingIntent.getBroadcast(
+                context,
+                1,
+                Intent(ACTION_PAUSE),
+                PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val rewindIntent = PendingIntent.getBroadcast(
+                context,
+                2,
+                Intent(ACTION_REWIND),
+                PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val playAction = RemoteAction(
+                Icon.createWithResource(context, android.R.drawable.ic_media_play),
+                "Play",
+                "Play",
+                playIntent
+            )
+
+            val pauseAction = RemoteAction(
+                Icon.createWithResource(context, android.R.drawable.ic_media_pause),
+                "Pause",
+                "Pause",
+                pauseIntent
+            )
+
+            val rewindAction = RemoteAction(
+                Icon.createWithResource(context, android.R.drawable.ic_media_rew),
+                "Rewind",
+                "Rewind 10 seconds",
+                rewindIntent
+            )
+
+            val paramsBuilder = PictureInPictureParams.Builder()
+                .setAspectRatio(aspectRatio)
+                .setActions(listOf(rewindAction, playAction, pauseAction))
+
         
         // Set source rect for smoother transitions on Android 12+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -193,6 +248,23 @@ class VideoPlayerPipPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
       return false
     }
   }
+
+    private val pipActionReceiver = object : android.content.BroadcastReceiver() {
+      override fun onReceive(context: Context?, intent: Intent?) {
+          when (intent?.action) {
+              ACTION_PLAY -> {
+                  channel.invokeMethod("pipPlay", null)
+              }
+              ACTION_PAUSE -> {
+                  channel.invokeMethod("pipPause", null)
+              }
+              ACTION_REWIND -> {
+                  channel.invokeMethod("pipRewind", null)
+              }
+          }
+      }
+  }
+
   
   private fun exitPipMode(): Boolean {
     if (!isPipSupported() || activity == null) {
@@ -363,6 +435,13 @@ class VideoPlayerPipPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     activity = binding.activity
     activityBinding = binding
     
+    val filter = IntentFilter().apply {
+    addAction(ACTION_PLAY)
+    addAction(ACTION_PAUSE)
+    addAction(ACTION_REWIND)
+    }
+    activity?.registerReceiver(pipActionReceiver, filter)
+
     // Set up PiP mode change listener
     setupPipModeChangeListener(binding)
   }
@@ -386,6 +465,8 @@ class VideoPlayerPipPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
   override fun onDetachedFromActivity() {
     Log.d(TAG, "Plugin detached from activity")
     cleanupPipModeChangeListener()
+    activity?.unregisterReceiver(pipActionReceiver)
+
     activity = null
     activityBinding = null
     playerViewCache.clear()
@@ -483,55 +564,3 @@ class VideoPlayerPipPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     }
   }
 }
-
-
-private fun buildPipParams(): PictureInPictureParams {
-    val playIntent = PendingIntent.getBroadcast(
-        context,
-        0,
-        Intent("PLAY_ACTION"),
-        PendingIntent.FLAG_IMMUTABLE
-    )
-
-    val pauseIntent = PendingIntent.getBroadcast(
-        context,
-        1,
-        Intent("PAUSE_ACTION"),
-        PendingIntent.FLAG_IMMUTABLE
-    )
-
-    val playAction = RemoteAction(
-        Icon.createWithResource(context, R.drawable.ic_play),
-        "Play",
-        "Play",
-        playIntent
-    )
-
-    val pauseAction = RemoteAction(
-        Icon.createWithResource(context, R.drawable.ic_pause),
-        "Pause",
-        "Pause",
-        pauseIntent
-    )
-
-    return PictureInPictureParams.Builder()
-        .setAspectRatio(Rational(16, 9))
-        .setActions(listOf(playAction, pauseAction))
-        .build()
-}
-
-
-class PipActionReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        when (intent.action) {
-            "PLAY_ACTION" -> {
-                // Resume ExoPlayer
-            }
-            "PAUSE_ACTION" -> {
-                // Pause ExoPlayer
-            }
-        }
-    }
-}
-
-

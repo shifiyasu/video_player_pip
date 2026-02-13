@@ -3,11 +3,7 @@
     <!-- Required for PiP support on Android 8.0+ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
-    <application>
-        <receiver 
-            android:name=".PipActionReceiver" 
-            android:exported="false" />
-    </application>
+    
 
     
     <!--

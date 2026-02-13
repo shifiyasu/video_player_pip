@@ -1,9 +1,12 @@
 package uz.flutterwithakmaljon.video_player_pip
 
 import android.app.PendingIntent
+import android.app.RemoteAction
 import android.content.Intent
 import android.graphics.drawable.Icon
-import android.app.RemoteAction
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
+
 
 import android.app.Activity
 import android.app.PictureInPictureParams
@@ -167,35 +170,38 @@ class VideoPlayerPipPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
         
 
             val playIntent = PendingIntent.getBroadcast(
-                context,
+                activity,
                 0,
                 Intent(ACTION_PLAY),
-                PendingIntent.FLAG_IMMUTABLE
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+
             )
 
             val pauseIntent = PendingIntent.getBroadcast(
-                context,
+                activity,
                 1,
                 Intent(ACTION_PAUSE),
-                PendingIntent.FLAG_IMMUTABLE
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+
             )
 
             val rewindIntent = PendingIntent.getBroadcast(
-                context,
+                activity,
                 2,
                 Intent(ACTION_REWIND),
-                PendingIntent.FLAG_IMMUTABLE
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+
             )
 
             val playAction = RemoteAction(
-                Icon.createWithResource(context, android.R.drawable.ic_media_play),
+                Icon.createWithResource(activity!, android.R.drawable.ic_media_play),
                 "Play",
                 "Play",
                 playIntent
             )
 
             val pauseAction = RemoteAction(
-                Icon.createWithResource(context, android.R.drawable.ic_media_pause),
+                Icon.createWithResource(activity!, android.R.drawable.ic_media_pause),
                 "Pause",
                 "Pause",
                 pauseIntent
@@ -249,7 +255,7 @@ class VideoPlayerPipPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     }
   }
 
-    private val pipActionReceiver = object : android.content.BroadcastReceiver() {
+    private val pipActionReceiver = object : BroadcastReceiver() {
       override fun onReceive(context: Context?, intent: Intent?) {
           when (intent?.action) {
               ACTION_PLAY -> {

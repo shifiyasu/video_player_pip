@@ -1,15 +1,25 @@
 package uz.flutterwithakmaljon.video_player_pip
 
 import android.app.Activity
+import android.app.PendingIntent
 import android.app.PictureInPictureParams
+import android.app.RemoteAction
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.Configuration
+import android.graphics.drawable.Icon
+import android.media.MediaMetadata
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.os.Build
 import android.util.Log
 import android.util.Rational
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
+import androidx.annotation.RequiresApi
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -22,10 +32,6 @@ import io.flutter.plugin.common.MethodChannel.Result
 class VideoPlayerPipPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
   private val TAG = "VideoPlayerPipPlugin"
   
-  /// The MethodChannel that will the communication between Flutter and native Android
-  ///
-  /// This local reference serves to register the plugin with the Flutter Engine and unregister it
-  /// when the Flutter Engine is detached from the Activity
   private lateinit var channel: MethodChannel
   private lateinit var context: Context
   private var activity: Activity? = null
@@ -33,14 +39,57 @@ class VideoPlayerPipPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
   private var activityBinding: ActivityPluginBinding? = null
   private var componentCallback: android.content.ComponentCallbacks? = null
   
-  // Cache of player ID to view mappings to improve performance for multiple calls
+  // Cache of player ID to view mappings
   private val playerViewCache = mutableMapOf<Int, View?>()
   
-  // Track the active player ID to ensure PiP only works for video screen
   private var activePlayerId: Int? = null
-  // Track if PiP was requested by user vs auto-triggered
   private var pipRequestedByUser = false
+
+  // --- Constants for Media Controls ---
+  private val ACTION_PIP_CONTROL = "uz.flutterwithakmaljon.video_player_pip.MEDIA_CONTROL"
+  private val EXTRA_CONTROL_TYPE = "control_type"
+  private val CONTROL_TYPE_PLAY = 1
+  private val CONTROL_TYPE_PAUSE = 2
   
+  // Track current state to update icons efficiently
+  private var isPlayingState = true 
+  
+  // --- NEW: MediaSession for Seek Bar Support ---
+  private var mediaSession: MediaSession? = null
+
+  // --- BroadcastReceiver to handle button clicks on the PiP window ---
+  private val pipBroadcastReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+      if (intent == null || intent.action != ACTION_PIP_CONTROL) return
+
+      val type = intent.getIntExtra(EXTRA_CONTROL_TYPE, 0)
+      when (type) {
+        CONTROL_TYPE_PLAY -> {
+          channel.invokeMethod("pipAction", "play")
+          // Optimistically update UI
+          updatePipParams(true, 0, 0) 
+        }
+        CONTROL_TYPE_PAUSE -> {
+          channel.invokeMethod("pipAction", "pause")
+          updatePipParams(false, 0, 0)
+        }
+      }
+    }
+  }
+
+  // --- NEW: MediaSession Callback for Seeking ---
+  private val mediaSessionCallback = object : MediaSession.Callback() {
+    override fun onSeekTo(pos: Long) {
+        super.onSeekTo(pos)
+        // Send the seek request back to Flutter
+        // "seekTo" needs to be handled in your Dart MethodChannel listener
+        channel.invokeMethod("seekTo", pos)
+        
+        // Optimistically update local state so the bar jumps immediately
+        updateMediaSessionState(isPlayingState, pos, -1)
+    }
+  }
+
   override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
     channel = MethodChannel(flutterPluginBinding.binaryMessenger, "video_player_pip")
     channel.setMethodCallHandler(this)
@@ -49,49 +98,48 @@ class VideoPlayerPipPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
   }
 
   override fun onMethodCall(call: MethodCall, result: Result) {
-    Log.d(TAG, "Method called: ${call.method}")
-    
     when (call.method) {
       "isPipSupported" -> {
-        val supported = isPipSupported()
-        Log.d(TAG, "PiP supported: $supported")
-        result.success(supported)
+        result.success(isPipSupported())
       }
       "enterPipMode" -> {
         val playerId = call.argument<Int>("playerId")
         val width = call.argument<Int>("width")
         val height = call.argument<Int>("height")
-        Log.d(TAG, "Entering PiP mode for playerId: $playerId, width: $width, height: $height")
+        val isPlaying = call.argument<Boolean>("isPlaying") ?: true
         
+        // Get initial position/duration if provided, else 0
+        val currentPosition = (call.argument<Number>("currentPosition")?.toLong()) ?: 0L
+        val duration = (call.argument<Number>("duration")?.toLong()) ?: 0L
+
         if (playerId != null) {
-          // Set active player ID when user explicitly requests PiP
           activePlayerId = playerId
           pipRequestedByUser = true
-          val success = enterPipMode(playerId, width, height)
-          Log.d(TAG, "Enter PiP result: $success")
+          val success = enterPipMode(playerId, width, height, isPlaying, currentPosition, duration)
           result.success(success)
         } else {
-          Log.e(TAG, "Invalid argument: playerId is null")
           result.error("INVALID_ARGUMENT", "Player ID is required", null)
         }
       }
       "exitPipMode" -> {
-        Log.d(TAG, "Exiting PiP mode, current state: $isInPipMode")
-        // Clear active player ID when exiting PiP
         pipRequestedByUser = false
         val success = exitPipMode()
-        if (success) {
-          activePlayerId = null
-        }
-        Log.d(TAG, "Exit PiP result: $success")
+        if (success) activePlayerId = null
         result.success(success)
       }
       "isInPipMode" -> {
-        Log.d(TAG, "Checking if in PiP mode: $isInPipMode")
         result.success(isInPipMode)
       }
+      "updatePipUi" -> {
+         // Flutter calls this constantly or on state change
+         val isPlaying = call.argument<Boolean>("isPlaying") ?: false
+         val position = (call.argument<Number>("position")?.toLong()) ?: 0L
+         val duration = (call.argument<Number>("duration")?.toLong()) ?: 0L
+         
+         updatePipParams(isPlaying, position, duration)
+         result.success(null)
+      }
       else -> {
-        Log.w(TAG, "Method not implemented: ${call.method}")
         result.notImplemented()
       }
     }
@@ -101,63 +149,52 @@ class VideoPlayerPipPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
     return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
   }
   
-  private fun enterPipMode(playerId: Int, customWidth: Int?, customHeight: Int?): Boolean {
-    if (!isPipSupported() || activity == null) {
-      Log.d(TAG, "PiP not supported or activity is null")
-      return false
-    }
+  private fun enterPipMode(
+      playerId: Int, 
+      customWidth: Int?, 
+      customHeight: Int?, 
+      isPlaying: Boolean,
+      currentPosition: Long,
+      duration: Long
+  ): Boolean {
+    if (!isPipSupported() || activity == null) return false
     
+    this.isPlayingState = isPlaying
+
     try {
-      // Clear cache if different player ID
+      // 1. Initialize the MediaSession (Required for Seek Bar)
+      initMediaSession()
+      updateMediaSessionMetadata(duration)
+      updateMediaSessionState(isPlaying, currentPosition, duration)
+
       if (!playerViewCache.containsKey(playerId)) {
-        Log.d(TAG, "Clearing player view cache for new playerId: $playerId")
         playerViewCache.clear()
       }
       
-      // Find the video player view in the hierarchy
-      val videoView = playerViewCache.getOrPut(playerId) { 
-        Log.d(TAG, "Finding video player view for ID: $playerId")
-        findVideoPlayerView(playerId) 
-      }
-      
-      if (videoView == null) {
-        Log.e(TAG, "Could not find video player view for ID: $playerId")
-        return false
-      }
-      
-      Log.d(TAG, "Found video view: ${videoView.javaClass.simpleName}, width: ${videoView.width}, height: ${videoView.height}")
+      val videoView = playerViewCache.getOrPut(playerId) { findVideoPlayerView(playerId) }
+      if (videoView == null) return false
       
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        // Use custom dimensions if provided, otherwise use the view's dimensions
         val width = customWidth ?: videoView.width
         val height = customHeight ?: videoView.height
         
-        Log.d(TAG, "Using dimensions for PiP: width=$width, height=$height")
-        
-        // Default to 16:9 if dimensions are invalid or too small
-        val aspectRatio = if (width > 0 && height > 0 && width >= 100 && height >= 100) {
+        // Aspect Ratio Logic
+        val aspectRatio = if (width > 0 && height > 0) {
           val currentRatio = width.toFloat() / height.toFloat()
-          // Android's documented min/max aspect ratio for PiP.
-          // See: https://developer.android.com/guide/topics/ui/picture-in-picture#recqs
-          // Values are approximately 1/2.39 and 2.39.
-          val minAllowedAspectRatio = 0.418410f 
-          val maxAllowedAspectRatio = 2.390000f
-
-          if (currentRatio >= minAllowedAspectRatio && currentRatio <= maxAllowedAspectRatio) {
+          if (currentRatio >= 0.418410f && currentRatio <= 2.390000f) {
             Rational(width, height)
           } else {
-            Log.w(TAG, "Provided width ($width) and height ($height) result in an extreme aspect ratio ($currentRatio). Defaulting to 16:9. Allowed range: [$minAllowedAspectRatio, $maxAllowedAspectRatio]")
             Rational(16, 9)
           }
         } else {
-          Log.d(TAG, "Using default 16:9 aspect ratio as dimensions are invalid (width: $width, height: $height) or too small (min 100x100)")
           Rational(16, 9)
         }
         
         val paramsBuilder = PictureInPictureParams.Builder()
             .setAspectRatio(aspectRatio)
+            .setActions(buildRemoteActions(isPlaying))
         
-        // Set source rect for smoother transitions on Android 12+
+        // Android 12+ Improvements
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val location = IntArray(2)
             videoView.getLocationInWindow(location)
@@ -167,318 +204,29 @@ class VideoPlayerPipPlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
                 location[1] + videoView.height
             )
             paramsBuilder.setSourceRectHint(sourceRectHint)
-            Log.d(TAG, "Setting sourceRectHint to $sourceRectHint")
-        }
-        
-        // Set is seamless for smoother transitions on Android 12+
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             paramsBuilder.setSeamlessResizeEnabled(true)
-            Log.d(TAG, "Setting seamlessResizeEnabled to true")
+            paramsBuilder.setAutoEnterEnabled(true)
         }
         
         val params = paramsBuilder.build()
-        
-        // Enter PiP mode
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val result = activity?.enterPictureInPictureMode(params) ?: false
-            Log.d(TAG, "enterPictureInPictureMode result: $result")
-            return result
-        }
+        val result = activity?.enterPictureInPictureMode(params) ?: false
+        return result
       }
-      
       return false
     } catch (e: Exception) {
       Log.e(TAG, "Error entering PiP mode", e)
       return false
     }
   }
-  
-  private fun exitPipMode(): Boolean {
-    if (!isPipSupported() || activity == null) {
-      Log.d(TAG, "Cannot exit PiP: not supported or activity is null")
-      return false
-    }
-    
-    try {
-      if (isInPipMode) {
-        Log.d(TAG, "Currently in PiP mode, attempting to exit")
-        
-        // For Android 10+, we can use a better approach to exit PiP mode
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-          activity?.let {
-            // This will bring the app back to full screen
-            Log.d(TAG, "Using Android 10+ approach: changing orientation")
-            it.requestedOrientation = it.requestedOrientation
-          }
-        } else {
-          // For older versions, moving task to back and then bringing it forward is a workaround
-          Log.d(TAG, "Using pre-Android 10 approach: move task to back and relaunch")
-          activity?.moveTaskToBack(false)
-          activity?.let {
-            it.startActivity(it.packageManager.getLaunchIntentForPackage(it.packageName))
-          }
-        }
-        
-        // Reset PiP state
-        isInPipMode = false
-        pipRequestedByUser = false
-        
-        return true
-      }
-      Log.d(TAG, "Not in PiP mode, cannot exit")
-      return false
-    } catch (e: Exception) {
-      Log.e(TAG, "Error exiting PiP mode", e)
-      return false
-    }
-  }
-  
+
   /**
-   * Finds the video player view for the given player ID.
-   * This is implemented based on analysis of how video_player creates its views.
+   * Updates the PiP controls (Buttons AND Seek Bar)
    */
-  private fun findVideoPlayerView(playerId: Int): View? {
-    if (activity == null) {
-      Log.d(TAG, "Activity is null, cannot find video player view")
-      return null
+  private fun updatePipParams(isPlaying: Boolean, position: Long, duration: Long) {
+    // Update the MediaSession (The Seek Bar)
+    updateMediaSessionState(isPlaying, position, duration)
+    if (duration > 0) {
+        updateMediaSessionMetadata(duration)
     }
-    
-    val rootView = activity?.findViewById<ViewGroup>(android.R.id.content)?.getChildAt(0)
-    Log.d(TAG, "Starting view search from root: ${rootView?.javaClass?.simpleName}")
-    
-    // Try to find a tag or ID that might match the player ID
-    return findVideoPlayerViewRecursively(rootView, playerId)
-  }
-  
-  /**
-   * Recursively searches the view hierarchy for the SurfaceView or TextureView used by video_player.
-   * Tries to match by playerID and also looks for platform view containers.
-   */
-  private fun findVideoPlayerViewRecursively(view: View?, playerId: Int, depth: Int = 0): View? {
-    if (view == null) return null
-    
-    val indentation = " ".repeat(depth * 2)  // For logging hierarchy
-    val viewClassName = view.javaClass.simpleName
-    Log.v(TAG, "$indentation Checking view: $viewClassName, tag: ${view.tag}")
-    
-    // Check if the view has a tag matching our player ID
-    if (view.tag != null && view.tag is String && (view.tag as String).contains("$playerId")) {
-      Log.d(TAG, "$indentation Found view with matching tag: ${view.tag}")
-      return view
-    }
-    
-    // Check if this is a SurfaceView (what video_player uses in platform view mode)
-    if (view is SurfaceView) {
-      Log.v(TAG, "$indentation Found SurfaceView")
-      
-      // This could be our video view
-      val parent = view.parent as? View
-      if (isFlutterPlatformView(parent)) {
-        Log.d(TAG, "$indentation SurfaceView's parent is a platform view")
-        
-        // Check if we can find any references to the player ID in the view hierarchy
-        if (parent?.tag != null && parent.tag.toString().contains("$playerId")) {
-          Log.d(TAG, "$indentation Platform view has matching player ID tag: ${parent.tag}")
-          return view
-        }
-        
-        // If we can't find a direct reference but this is the only video view, use it
-        Log.d(TAG, "$indentation Using SurfaceView as fallback (no specific ID match)")
-        return view
-      }
-    }
-    
-    // Check if it's a platform view with a SurfaceView child
-    if (isFlutterPlatformView(view)) {
-      Log.v(TAG, "$indentation Found Flutter platform view: $viewClassName")
-      
-      if (view is ViewGroup) {
-        for (i in 0 until view.childCount) {
-          val child = view.getChildAt(i)
-          if (child is SurfaceView) {
-            Log.d(TAG, "$indentation Found SurfaceView child of platform view")
-            return child
-          }
-        }
-      }
-    }
-    
-    // Recursively check children
-    if (view is ViewGroup) {
-      val childCount = view.childCount
-      Log.v(TAG, "$indentation Checking $childCount children of $viewClassName")
-      
-      for (i in 0 until childCount) {
-        val found = findVideoPlayerViewRecursively(view.getChildAt(i), playerId, depth + 1)
-        if (found != null) return found
-      }
-    }
-    
-    // If we've checked everything and still can't find a match, return the first SurfaceView
-    // This is a fallback for when we can't find a direct match
-    if (view is ViewGroup && playerId != -1) {
-      var firstSurfaceView: SurfaceView? = null
-      
-      for (i in 0 until view.childCount) {
-        val child = view.getChildAt(i)
-        if (child is SurfaceView && firstSurfaceView == null) {
-          firstSurfaceView = child
-          Log.v(TAG, "$indentation Found first SurfaceView as fallback")
-        }
-      }
-      
-      if (firstSurfaceView != null) {
-        Log.d(TAG, "$indentation Using first SurfaceView as fallback")
-        return firstSurfaceView
-      }
-    }
-    
-    return null
-  }
-  
-  /**
-   * Checks if the view is a Flutter platform view.
-   */
-  private fun isFlutterPlatformView(view: View?): Boolean {
-    if (view == null) return false
-    
-    // The class name for platform views contains "PlatformView"
-    val className = view.javaClass.name
-    val isPlatformView = className.contains("PlatformView") && !className.contains("Factory")
-    if (isPlatformView) {
-      Log.v(TAG, "Identified Flutter platform view: $className")
-    }
-    return isPlatformView
-  }
 
-  override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-    Log.d(TAG, "Plugin detached from engine")
-    channel.setMethodCallHandler(null)
-    playerViewCache.clear()
-  }
-
-  override fun onAttachedToActivity(binding: ActivityPluginBinding) {
-    Log.d(TAG, "Plugin attached to activity")
-    activity = binding.activity
-    activityBinding = binding
-    
-    // Set up PiP mode change listener
-    setupPipModeChangeListener(binding)
-  }
-
-  override fun onDetachedFromActivityForConfigChanges() {
-    Log.d(TAG, "Plugin detached from activity for config changes")
-    cleanupPipModeChangeListener()
-    activity = null
-    activityBinding = null
-  }
-
-  override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
-    Log.d(TAG, "Plugin reattached to activity for config changes")
-    activity = binding.activity
-    activityBinding = binding
-    
-    // Re-set up PiP mode change listener
-    setupPipModeChangeListener(binding)
-  }
-
-  override fun onDetachedFromActivity() {
-    Log.d(TAG, "Plugin detached from activity")
-    cleanupPipModeChangeListener()
-    activity = null
-    activityBinding = null
-    playerViewCache.clear()
-    
-    // Reset PiP state on detach
-    isInPipMode = false
-    activePlayerId = null
-    pipRequestedByUser = false
-  }
-  
-  private fun setupPipModeChangeListener(binding: ActivityPluginBinding) {
-    Log.d(TAG, "Setting up PiP mode change listener")
-    binding.addActivityResultListener { requestCode, resultCode, data ->
-      // Update PiP state on activity result as a fallback mechanism
-      Log.v(TAG, "Activity result received: requestCode=$requestCode, resultCode=$resultCode")
-      updatePipState()
-      false // Not consuming the result
-    }
-    
-    // Use Configuration.onPictureInPictureModeChanged for API 26+
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      // Store the callback to properly clean it up later
-      componentCallback = object : android.content.ComponentCallbacks {
-        override fun onConfigurationChanged(newConfig: Configuration) {
-          val isInPictureInPictureMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            activity?.isInPictureInPictureMode ?: false
-          } else {
-            false
-          }
-          
-          Log.d(TAG, "Configuration changed: PiP mode = $isInPictureInPictureMode (was $isInPipMode)")
-          
-          if (isInPipMode != isInPictureInPictureMode) {
-            isInPipMode = isInPictureInPictureMode
-            
-            // If PiP mode is exited, clear the active player ID
-            if (!isInPipMode) {
-              activePlayerId = null
-              pipRequestedByUser = false
-            }
-            
-            notifyPipModeChanged()
-          }
-        }
-        
-        override fun onLowMemory() {
-          // No implementation needed
-          Log.d(TAG, "Low memory warning received")
-        }
-      }
-      
-      activity?.registerComponentCallbacks(componentCallback)
-    }
-  }
-  
-  private fun cleanupPipModeChangeListener() {
-    Log.d(TAG, "Cleaning up PiP mode change listener")
-    
-    // Clean up component callbacks to prevent memory leaks
-    componentCallback?.let {
-      activity?.unregisterComponentCallbacks(it)
-      componentCallback = null
-    }
-    
-    activityBinding = null
-  }
-  
-  private fun updatePipState() {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      val newPipState = activity?.isInPictureInPictureMode ?: false
-      Log.d(TAG, "Updating PiP state: current=$isInPipMode, new=$newPipState")
-      
-      if (newPipState != isInPipMode) {
-        isInPipMode = newPipState
-        
-        // If exiting PiP mode, reset the player ID
-        if (!isInPipMode) {
-          activePlayerId = null
-          pipRequestedByUser = false
-        }
-        
-        notifyPipModeChanged()
-      }
-    }
-  }
-  
-  private fun notifyPipModeChanged() {
-    try {
-      Log.d(TAG, "Notifying Flutter of PiP mode change: $isInPipMode")
-      channel.invokeMethod("pipModeChanged", mapOf(
-          "isInPipMode" to isInPipMode
-      ))
-    } catch (e: Exception) {
-      Log.e(TAG, "Error notifying PiP mode change", e)
-    }
-  }
-}
+    // Update the RemoteActions

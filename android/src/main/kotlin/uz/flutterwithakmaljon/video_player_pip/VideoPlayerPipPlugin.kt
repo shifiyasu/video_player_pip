@@ -62,7 +62,7 @@ class VideoPlayerPipPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             when (type) {
                 CONTROL_TYPE_PLAY -> {
                     channel.invokeMethod("pipAction", "play")
-                    updatePipParams(true, -1, -1) 
+                    updatePipParams(true, -1, -1)
                 }
                 CONTROL_TYPE_PAUSE -> {
                     channel.invokeMethod("pipAction", "pause")
@@ -178,7 +178,7 @@ class VideoPlayerPipPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
                 val paramsBuilder = PictureInPictureParams.Builder()
                     .setAspectRatio(aspectRatio)
-                    .setActions(buildRemoteActions(isPlaying)) 
+                    .setActions(buildRemoteActions(isPlaying))
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     paramsBuilder.setAutoEnterEnabled(true)
@@ -219,7 +219,7 @@ class VideoPlayerPipPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 setFlags(MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS or MediaSession.FLAG_HANDLES_MEDIA_BUTTONS)
                 isActive = true
             }
-            
+
             activity?.let {
                 val mediaController = MediaController(context, mediaSession!!.sessionToken)
                 it.mediaController = mediaController
@@ -234,7 +234,7 @@ class VideoPlayerPipPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         if (mediaSession == null) return
         val metadataBuilder = MediaMetadata.Builder()
         metadataBuilder.putLong(MediaMetadata.METADATA_KEY_DURATION, duration)
-        
+
         // Dummy art is sometimes required by Samsung/Pixel
         val dummyBitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
         metadataBuilder.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, dummyBitmap)
@@ -246,26 +246,26 @@ class VideoPlayerPipPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     private fun updatePlaybackState(isPlaying: Boolean, position: Long) {
         if (mediaSession == null) return
         val stateBuilder = PlaybackState.Builder()
-        
+
         val actions = PlaybackState.ACTION_PLAY or
                 PlaybackState.ACTION_PAUSE or
-                PlaybackState.ACTION_SEEK_TO 
+                PlaybackState.ACTION_SEEK_TO
 
         val state = if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
         val speed = if (isPlaying) 1.0f else 0.0f
 
         stateBuilder.setActions(actions)
         stateBuilder.setState(state, position, speed)
-        
+
         mediaSession?.setPlaybackState(stateBuilder.build())
     }
 
     private fun updatePipParams(isPlaying: Boolean, position: Long, duration: Long) {
         this.isPlayingState = isPlaying
-        
+
         if (mediaSession != null) {
             if (duration >= 0) updateMediaMetadata(duration)
-            val posToUse = if (position >= 0) position else 0L 
+            val posToUse = if (position >= 0) position else 0L
             updatePlaybackState(isPlaying, posToUse)
         }
 
@@ -284,7 +284,7 @@ class VideoPlayerPipPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
     @RequiresApi(Build.VERSION_CODES.O)
     private fun buildRemoteActions(isPlaying: Boolean): List<RemoteAction> {
         val actions = mutableListOf<RemoteAction>()
-        
+
         val iconId = if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
         val title = if (isPlaying) "Pause" else "Play"
         val controlType = if (isPlaying) CONTROL_TYPE_PAUSE else CONTROL_TYPE_PLAY
@@ -302,11 +302,11 @@ class VideoPlayerPipPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
         val pendingIntent = PendingIntent.getBroadcast(context, controlType, intent, flags)
         val icon = Icon.createWithResource(context, iconId)
-        
+
         actions.add(RemoteAction(icon, title, title, pendingIntent))
         return actions
     }
-    
+
     // --- Lifecycle and View Finding Logic ---
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
@@ -359,9 +359,9 @@ class VideoPlayerPipPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         mediaSession?.release()
         mediaSession = null
     }
-    
+
     private fun setupPipModeChangeListener(binding: ActivityPluginBinding) {
-         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             componentCallback = object : android.content.ComponentCallbacks {
                 override fun onConfigurationChanged(newConfig: Configuration) {
                     val newPipState = activity?.isInPictureInPictureMode ?: false
@@ -381,7 +381,7 @@ class VideoPlayerPipPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         componentCallback?.let { activity?.unregisterComponentCallbacks(it) }
         componentCallback = null
     }
-    
+
     private fun findVideoPlayerView(playerId: Int): View? {
         if (activity == null) return null
         val rootView = activity?.findViewById<ViewGroup>(android.R.id.content)?.getChildAt(0)
